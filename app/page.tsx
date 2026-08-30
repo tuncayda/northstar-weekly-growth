@@ -130,24 +130,34 @@ export default function Home() {
 
       <section className="page">
         {view === "overview" && <>
-          <header className="topbar">
-            <div><p className="eyebrow">{week.label}</p><h1>Your week,<br className="desktop-break" /> in focus.</h1></div>
-            <button className="primary-button" onClick={startReview}><span>{reviews.some((r) => r.id === week.id) ? "Update weekly review" : "Start weekly review"}</span><b>→</b></button>
-          </header>
+          <section className="home-fold">
+            <header className="topbar">
+              <div><p className="eyebrow">{week.label}</p><h1>Your week,<br className="desktop-break" /> in focus.</h1></div>
+            </header>
 
-          <div className="hero-grid">
-            <article className="score-card">
-              <p className="card-label">OVERALL SCORE</p>
-              <div className="score-row"><strong>{hydrated ? formatScore(latest?.overall) : "—"}</strong>{latest && <span>/10</span>}{latestDelta && <div className={`score-change ${latestDelta.up ? "" : "negative"}`}>{latestDelta.up ? "↑" : "↓"} {latestDelta.value.replace(/^[-+−]/, "")} <small>vs last review</small></div>}</div>
-              {ordered.length ? <TrendBars reviews={ordered.slice(-8)} value={(r) => r.overall} /> : <div className="empty-trend"><span>01</span><i /><span>10</span><p>Your trend begins after your first review.</p></div>}
-            </article>
-            <article className="quote-card"><div className="quote-mark">“</div><blockquote>Progress is the quiet result of showing up, reflecting honestly, and choosing again.</blockquote><p>YOUR WEEKLY REMINDER</p></article>
-          </div>
+            <div className="hero-grid home-score-grid">
+              <article className="score-card">
+                <p className="card-label">OVERALL SCORE</p>
+                <div className="score-row"><strong>{hydrated ? formatScore(latest?.overall) : "—"}</strong>{latest && <span>/10</span>}{latestDelta && <div className={`score-change ${latestDelta.up ? "" : "negative"}`}>{latestDelta.up ? "↑" : "↓"} {latestDelta.value.replace(/^[-+−]/, "")} <small>vs last review</small></div>}</div>
+                {ordered.length ? <TrendBars reviews={ordered.slice(-8)} value={(r) => r.overall} /> : <div className="empty-trend"><span>01</span><i /><span>10</span><p>Your trend begins after your first review.</p></div>}
+              </article>
+            </div>
+
+            <button className="home-review-cta" onClick={startReview}>
+              <span><small>WEEKLY PRACTICE</small>{reviews.some((r) => r.id === week.id) ? "Update your weekly review" : "Start your weekly review"}</span>
+              <b>→</b>
+            </button>
+          </section>
+
+          <article className="reminder-strip">
+            <div><p>YOUR WEEKLY REMINDER</p><span>“</span></div>
+            <blockquote>Progress is the quiet result of showing up, reflecting honestly, and choosing again.</blockquote>
+          </article>
 
           <section className="skills-section">
-            <div className="section-heading"><div><p className="eyebrow">YOUR PRACTICE</p><h2>Skills in motion</h2></div><button className="text-button" onClick={() => setView("practice")}>View all 13 <span>→</span></button></div>
+            <div className="section-heading"><div><p className="eyebrow">YOUR PRACTICE</p><h2>All 13 skills</h2></div></div>
             <div className="skill-table">
-              {skills.slice(0, 5).map((skill, index) => {
+              {skills.map((skill, index) => {
                 const value = scoreFor(skill); const movement = delta(value, previous?.scores[skill.id]);
                 return <article className="skill-row" key={skill.id}><span className="skill-index">{String(index + 1).padStart(2, "0")}</span><div className="skill-name"><h3>{skill.title}</h3><div className="mini-bar"><i style={{ width: `${(value ?? 0) * 10}%` }} /></div></div><strong>{formatScore(value)}</strong><span className={`change ${movement && !movement.up ? "down" : ""}`}>{movement?.value ?? ""}</span><button onClick={() => setSelectedSkill(skill)} aria-label={`See ${skill.title} trend`}>↗</button></article>;
               })}
