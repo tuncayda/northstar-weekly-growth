@@ -1,6 +1,7 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChartNoAxesCombined, Database, House, Sparkles } from "lucide-react";
 
 type Skill = { id: string; title: string; prompt: string; description: string };
 type Review = { id: string; date: string; week: string; scores: Record<string, number>; notes: Record<string, string>; overall: number };
@@ -119,9 +120,10 @@ export default function Home() {
       <aside className="sidebar">
         <button className="brand-mark" onClick={() => setView("overview")} aria-label="Northstar home">N</button>
         <nav aria-label="Main navigation">
-          <button className={`nav-dot ${view === "overview" ? "active" : ""}`} onClick={() => setView("overview")} aria-label="Overview"><span>⌂</span></button>
-          <button className={`nav-dot ${view === "trends" ? "active" : ""}`} onClick={() => setView("trends")} aria-label="Trends"><span>↗</span></button>
-          <button className={`nav-dot ${view === "practice" ? "active" : ""}`} onClick={() => setView("practice")} aria-label="Skills"><span>◆</span></button>
+          <button className={`nav-dot ${view === "overview" ? "active" : ""}`} onClick={() => setView("overview")} aria-label="Overview"><House aria-hidden="true" /><span className="nav-label">Home</span></button>
+          <button className={`nav-dot ${view === "trends" ? "active" : ""}`} onClick={() => setView("trends")} aria-label="Trends"><ChartNoAxesCombined aria-hidden="true" /><span className="nav-label">Trends</span></button>
+          <button className={`nav-dot ${view === "practice" ? "active" : ""}`} onClick={() => setView("practice")} aria-label="Skills"><Sparkles aria-hidden="true" /><span className="nav-label">Practice</span></button>
+          <button className={`nav-dot mobile-data ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen(true)} aria-label="Data settings"><Database aria-hidden="true" /><span className="nav-label">Data</span></button>
         </nav>
         <button className="avatar" onClick={() => setSettingsOpen(true)} aria-label="Data settings">TD</button>
       </aside>
@@ -157,7 +159,7 @@ export default function Home() {
         {view === "practice" && <PracticeView latest={latest} previous={previous} onSkill={setSelectedSkill} />}
       </section>
 
-      {reviewIndex !== null && <ReviewFlow index={reviewIndex} scores={draftScores} notes={draftNotes} onChoose={(id, value) => { const completedScores = { ...draftScores, [id]: value }; setDraftScores(completedScores); if (reviewIndex === skills.length - 1) finishReview(completedScores); else setReviewIndex(reviewIndex + 1); }} onNote={(id, value) => setDraftNotes((x) => ({ ...x, [id]: value }))} onBack={() => reviewIndex === 0 ? closeReview() : setReviewIndex(reviewIndex - 1)} onClose={closeReview} />}
+      {reviewIndex !== null && <ReviewFlow key={reviewIndex} index={reviewIndex} notes={draftNotes} onChoose={(id, value) => { const completedScores = { ...draftScores, [id]: value }; setDraftScores(completedScores); if (reviewIndex === skills.length - 1) finishReview(completedScores); else setReviewIndex(reviewIndex + 1); }} onNote={(id, value) => setDraftNotes((x) => ({ ...x, [id]: value }))} onBack={() => reviewIndex === 0 ? closeReview() : setReviewIndex(reviewIndex - 1)} onClose={closeReview} />}
       {selectedSkill && <SkillDetail skill={selectedSkill} reviews={ordered} onClose={() => setSelectedSkill(null)} />}
       {settingsOpen && <DataSettings count={reviews.length} onClose={() => setSettingsOpen(false)} onExport={exportData} onImport={() => fileInput.current?.click()} onReset={() => { if (confirm("Delete all saved Northstar reviews on this device?")) { setReviews([]); setDraftScores({}); setDraftNotes({}); localStorage.removeItem(DRAFT_KEY); setSettingsOpen(false); } }} />}
       <input ref={fileInput} className="hidden-input" type="file" accept="application/json" onChange={importData} />
@@ -187,10 +189,20 @@ function PracticeView({ latest, previous, onSkill }: { latest?: Review; previous
   return <><header className="inner-header"><div><p className="eyebrow">THE PRACTICE</p><h1>Thirteen ways<br />to grow.</h1><p className="header-copy">A personal operating system for becoming more intentional, more useful, and more human.</p></div></header><section className="practice-list">{skills.map((skill, index) => { const score = latest?.scores[skill.id]; const movement = delta(score, previous?.scores[skill.id]); return <button className="practice-card" key={skill.id} onClick={() => onSkill(skill)}><span className="practice-number">{String(index+1).padStart(2,"0")}</span><div><h2>{skill.title}</h2><p>{skill.description}</p></div><div className="practice-score"><strong>{formatScore(score)}</strong><small className={movement && !movement.up ? "negative" : ""}>{movement?.value}</small></div><span className="open-arrow">↗</span></button>; })}</section></>;
 }
 
-function ReviewFlow({ index, scores, notes, onChoose, onNote, onBack, onClose }: { index: number; scores: Record<string, number>; notes: Record<string, string>; onChoose: (id: string, value: number) => void; onNote: (id: string, value: string) => void; onBack: () => void; onClose: () => void }) {
-  const skill = skills[index]; const selected = scores[skill.id];
-  useEffect(() => { const handler = (e: KeyboardEvent) => { if (/^[1-9]$/.test(e.key)) onChoose(skill.id, Number(e.key)); if (e.key === "0") onChoose(skill.id, 10); if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler); }, [skill.id, onChoose, onClose]);
-  return <div className="review-screen"><header className="review-top"><button className="brand-mark" onClick={onClose}>N</button><div className="review-progress"><i style={{ width: `${((index+1)/skills.length)*100}%` }} /></div><span>{String(index+1).padStart(2,"0")} / {skills.length}</span><button className="close-button" onClick={onClose} aria-label="Close">×</button></header><section className="review-content"><p className="eyebrow">{skill.title.toUpperCase()}</p><h2>{skill.prompt}</h2><p className="review-description">{skill.description}</p><div className="rating-grid">{Array.from({length:10},(_,i) => <button className={selected === i+1 ? "selected" : ""} onClick={() => onChoose(skill.id, i+1)} key={i}><span>{i+1}</span></button>)}</div><div className="rating-labels"><span>Needs attention</span><span>Exceptional</span></div><label className="reflection-label"><span>One thing worth remembering <small>· optional, add before rating</small></span><textarea value={notes[skill.id] ?? ""} onChange={(e) => onNote(skill.id, e.target.value)} placeholder="A moment, lesson, or intention…" rows={2} /></label></section><footer className="review-footer"><button className="back-button" onClick={onBack}>← <span>{index === 0 ? "Exit" : "Back"}</span></button><p className="auto-advance-hint">Choose a number to {index === skills.length-1 ? "save this week" : "continue"} <span>→</span></p></footer></div>;
+function ReviewFlow({ index, notes, onChoose, onNote, onBack, onClose }: { index: number; notes: Record<string, string>; onChoose: (id: string, value: number) => void; onNote: (id: string, value: string) => void; onBack: () => void; onClose: () => void }) {
+  const skill = skills[index];
+  const [chosen, setChosen] = useState<number>();
+  const [leaving, setLeaving] = useState(false);
+  const advanceTimer = useRef<number | null>(null);
+  const choose = useCallback((value: number) => {
+    if (leaving) return;
+    setChosen(value);
+    setLeaving(true);
+    advanceTimer.current = window.setTimeout(() => onChoose(skill.id, value), 360);
+  }, [leaving, onChoose, skill.id]);
+  useEffect(() => () => { if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current); }, []);
+  useEffect(() => { const handler = (e: KeyboardEvent) => { if (/^[1-9]$/.test(e.key)) choose(Number(e.key)); if (e.key === "0") choose(10); if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler); }, [choose, onClose]);
+  return <div className="review-screen"><header className="review-top"><button className="brand-mark" onClick={onClose}>N</button><div className="review-progress"><i style={{ width: `${((index+1)/skills.length)*100}%` }} /></div><span>{String(index+1).padStart(2,"0")} / {skills.length}</span><button className="close-button" onClick={onClose} aria-label="Close">×</button></header><section className={`review-content ${leaving ? "point-leaving" : ""}`}><p className="eyebrow">{skill.title.toUpperCase()}</p><h2>{skill.prompt}</h2><p className="review-description">{skill.description}</p><div className="rating-grid">{Array.from({length:10},(_,i) => <button className={chosen === i+1 ? "selected" : ""} disabled={leaving} aria-pressed={chosen === i+1} onClick={() => choose(i+1)} key={i}><span>{i+1}</span></button>)}</div><div className="rating-labels"><span>Needs attention</span><span>Exceptional</span></div><label className="reflection-label"><span>One thing worth remembering <small>· optional, add before rating</small></span><textarea value={notes[skill.id] ?? ""} onChange={(e) => onNote(skill.id, e.target.value)} placeholder="A moment, lesson, or intention…" rows={2} /></label></section><footer className="review-footer"><button className="back-button" onClick={onBack}>← <span>{index === 0 ? "Exit" : "Back"}</span></button><p className="auto-advance-hint">Choose a number to {index === skills.length-1 ? "save this week" : "continue"} <span>→</span></p></footer></div>;
 }
 
 function SkillDetail({ skill, reviews, onClose }: { skill: Skill; reviews: Review[]; onClose: () => void }) {
