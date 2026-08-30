@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChartNoAxesCombined, Cloud, Database, House, LogOut, Mail, Sparkles } from "lucide-react";
+import { ChartNoAxesCombined, Cloud, Database, House, LogOut, Mail, Moon, Sparkles, Sun } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { isSupabaseConfigured, supabase } from "../src/lib/supabase";
 
@@ -9,6 +9,7 @@ type Skill = { id: string; title: string; prompt: string; description: string };
 type Review = { id: string; date: string; week: string; scores: Record<string, number>; notes: Record<string, string>; overall: number };
 type ReviewDraft = { weekId: string; index: number; scores: Record<string, number>; notes: Record<string, string> };
 type View = "overview" | "trends" | "practice";
+type Theme = "light" | "dark";
 
 const skills: Skill[] = [
   { id: "storytelling", title: "Storytelling", prompt: "Did you make your thinking visible and help people imagine the end goal?", description: "Visualize stories so people can understand your thinking, see the destination, and begin to live it." },
@@ -51,6 +52,20 @@ function delta(current?: number, previous?: number) {
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof window === "undefined") return "light";
+    try {
+      const saved = localStorage.getItem("northstar-theme");
+      if (saved === "light" || saved === "dark") return saved;
+    } catch { /* Continue with the device preference when storage is unavailable. */ }
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    try { localStorage.setItem("northstar-theme", theme); } catch { /* The theme still works for this visit. */ }
+  }, [theme]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -59,13 +74,14 @@ export default function Home() {
     return () => data.subscription.unsubscribe();
   }, []);
 
-  if (!isSupabaseConfigured) return <CloudSetupNeeded />;
-  if (!authReady) return <LoadingScreen />;
-  if (!user) return <SignInScreen />;
-  return <Tracker user={user} />;
+  const toggleTheme = () => setTheme((current) => current === "light" ? "dark" : "light");
+  if (!isSupabaseConfigured) return <CloudSetupNeeded theme={theme} onToggleTheme={toggleTheme} />;
+  if (!authReady) return <LoadingScreen theme={theme} onToggleTheme={toggleTheme} />;
+  if (!user) return <SignInScreen theme={theme} onToggleTheme={toggleTheme} />;
+  return <Tracker user={user} theme={theme} onToggleTheme={toggleTheme} />;
 }
 
-function Tracker({ user }: { user: User }) {
+function Tracker({ user, theme, onToggleTheme }: { user: User; theme: Theme; onToggleTheme: () => void }) {
   const [view, setView] = useState<View>("overview");
   const [reviews, setReviews] = useState<Review[]>([]);
   const [hydrated, setHydrated] = useState(false);
@@ -206,6 +222,7 @@ function Tracker({ user }: { user: User }) {
           <button className={`nav-dot ${view === "trends" ? "active" : ""}`} onClick={() => setView("trends")} aria-label="Trends"><ChartNoAxesCombined aria-hidden="true" /><span className="nav-label">Trends</span></button>
           <button className={`nav-dot ${view === "practice" ? "active" : ""}`} onClick={() => setView("practice")} aria-label="Skills"><Sparkles aria-hidden="true" /><span className="nav-label">Practice</span></button>
           <button className={`nav-dot mobile-data ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen(true)} aria-label="Data settings"><Database aria-hidden="true" /><span className="nav-label">Data</span></button>
+          <ThemeButton theme={theme} onToggle={onToggleTheme} className="nav-dot theme-nav" />
         </nav>
         <button className="avatar" onClick={() => setSettingsOpen(true)} aria-label="Data settings">TD</button>
       </aside>
@@ -308,15 +325,20 @@ function DataSettings({ email, count, onClose, onExport, onImport, onReset, onSi
 
 function EmptyState({ onStart }: { onStart: () => void }) { return <div className="empty-state"><p>No scores yet. Your first honest check-in is all it takes to begin.</p><button className="primary-button" onClick={onStart}><span>Start first review</span><b>→</b></button></div>; }
 
-function LoadingScreen() {
-  return <main className="auth-screen"><div className="auth-card"><div className="auth-brand">N</div><p className="eyebrow">NORTHSTAR</p><h1>Finding your progress…</h1><div className="loading-line"><i /></div></div></main>;
+function ThemeButton({ theme, onToggle, className = "theme-button" }: { theme: Theme; onToggle: () => void; className?: string }) {
+  const nextTheme = theme === "light" ? "dark" : "light";
+  return <button className={className} onClick={onToggle} aria-label={`Switch to ${nextTheme} mode`} title={`Switch to ${nextTheme} mode`}>{theme === "light" ? <Moon aria-hidden="true" /> : <Sun aria-hidden="true" />}<span className="nav-label">{theme === "light" ? "Dark" : "Light"}</span></button>;
 }
 
-function CloudSetupNeeded() {
-  return <main className="auth-screen"><div className="auth-card"><div className="auth-brand">N</div><p className="eyebrow">ONE-TIME SETUP</p><h1>Cloud connection needed.</h1><p className="auth-copy">Add the Supabase project details to finish enabling private sync.</p></div></main>;
+function LoadingScreen({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
+  return <main className="auth-screen"><ThemeButton theme={theme} onToggle={onToggleTheme} /><div className="auth-card"><div className="auth-brand">N</div><p className="eyebrow">NORTHSTAR</p><h1>Finding your progress…</h1><div className="loading-line"><i /></div></div></main>;
 }
 
-function SignInScreen() {
+function CloudSetupNeeded({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
+  return <main className="auth-screen"><ThemeButton theme={theme} onToggle={onToggleTheme} /><div className="auth-card"><div className="auth-brand">N</div><p className="eyebrow">ONE-TIME SETUP</p><h1>Cloud connection needed.</h1><p className="auth-copy">Add the Supabase project details to finish enabling private sync.</p></div></main>;
+}
+
+function SignInScreen({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const signIn = async (event: FormEvent) => {
@@ -325,5 +347,5 @@ function SignInScreen() {
     const { error } = await supabase!.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } });
     setStatus(error ? "error" : "sent");
   };
-  return <main className="auth-screen"><section className="auth-card"><div className="auth-brand">N</div><p className="eyebrow">NORTHSTAR · PRIVATE SYNC</p><h1>Your growth,<br />wherever you are.</h1><p className="auth-copy">Sign in with your email to keep reviews private and continue seamlessly on phone or computer.</p>{status === "sent" ? <div className="magic-sent"><Mail aria-hidden="true" /><div><strong>Check your inbox</strong><p>Open the secure link we sent to {email}.</p></div></div> : <form className="auth-form" onSubmit={signIn}><label htmlFor="northstar-email">Email address</label><input id="northstar-email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /><button type="submit" disabled={status === "sending"}><span>{status === "sending" ? "Sending secure link…" : "Email me a secure link"}</span><b>→</b></button>{status === "error" && <p className="auth-error">We could not send the link. Please try again.</p>}</form>}<p className="auth-footnote"><Cloud aria-hidden="true" /> No password to remember. Your data is protected per account.</p></section></main>;
+  return <main className="auth-screen"><ThemeButton theme={theme} onToggle={onToggleTheme} /><section className="auth-card"><div className="auth-brand">N</div><p className="eyebrow">NORTHSTAR · PRIVATE SYNC</p><h1>Your growth,<br />wherever you are.</h1><p className="auth-copy">Sign in with your email to keep reviews private and continue seamlessly on phone or computer.</p>{status === "sent" ? <div className="magic-sent"><Mail aria-hidden="true" /><div><strong>Check your inbox</strong><p>Open the secure link we sent to {email}.</p></div></div> : <form className="auth-form" onSubmit={signIn}><label htmlFor="northstar-email">Email address</label><input id="northstar-email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /><button type="submit" disabled={status === "sending"}><span>{status === "sending" ? "Sending secure link…" : "Email me a secure link"}</span><b>→</b></button>{status === "error" && <p className="auth-error">We could not send the link. Please try again.</p>}</form>}<p className="auth-footnote"><Cloud aria-hidden="true" /> No password to remember. Your data is protected per account.</p></section></main>;
 }
