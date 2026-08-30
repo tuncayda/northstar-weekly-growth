@@ -1,10 +1,13 @@
 "use client";
 
-import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChartNoAxesCombined, Database, House, Sparkles } from "lucide-react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChartNoAxesCombined, Cloud, Database, House, LogOut, Mail, Sparkles } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
+import { isSupabaseConfigured, supabase } from "../src/lib/supabase";
 
 type Skill = { id: string; title: string; prompt: string; description: string };
 type Review = { id: string; date: string; week: string; scores: Record<string, number>; notes: Record<string, string>; overall: number };
+type ReviewDraft = { weekId: string; index: number; scores: Record<string, number>; notes: Record<string, string> };
 type View = "overview" | "trends" | "practice";
 
 const skills: Skill[] = [
@@ -46,9 +49,28 @@ function delta(current?: number, previous?: number) {
 }
 
 export default function Home() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
+
+  useEffect(() => {
+    if (!supabase) return;
+    void supabase.auth.getSession().then(({ data }) => { setUser(data.session?.user ?? null); setAuthReady(true); });
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => { setUser(session?.user ?? null); setAuthReady(true); });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  if (!isSupabaseConfigured) return <CloudSetupNeeded />;
+  if (!authReady) return <LoadingScreen />;
+  if (!user) return <SignInScreen />;
+  return <Tracker user={user} />;
+}
+
+function Tracker({ user }: { user: User }) {
   const [view, setView] = useState<View>("overview");
   const [reviews, setReviews] = useState<Review[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const [savedDraft, setSavedDraft] = useState<ReviewDraft | null>(null);
+  const [syncError, setSyncError] = useState("");
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
   const [draftScores, setDraftScores] = useState<Record<string, number>>({});
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({});
@@ -58,19 +80,59 @@ export default function Home() {
   const week = getWeekInfo();
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      try { const saved = localStorage.getItem(STORAGE_KEY); if (saved) setReviews(JSON.parse(saved)); } catch { /* Start clean if stored data is malformed. */ }
-      setHydrated(true);
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
+    let active = true;
+    const loadCloudData = async () => {
+      setHydrated(false); setSyncError("");
+      const [reviewResult, draftResult] = await Promise.all([
+        supabase!.from("reviews").select("week_id, reviewed_at, week_label, scores, notes, overall").eq("user_id", user.id).order("reviewed_at"),
+        supabase!.from("review_drafts").select("week_id, current_index, scores, notes").eq("user_id", user.id).maybeSingle(),
+      ]);
+      if (!active) return;
+      if (reviewResult.error || draftResult.error) {
+        setSyncError("Cloud sync could not connect. Please try again shortly."); setHydrated(true); return;
+      }
+      let cloudReviews: Review[] = (reviewResult.data ?? []).map((row) => ({ id: row.week_id, date: row.reviewed_at, week: row.week_label, scores: row.scores as Record<string, number>, notes: row.notes as Record<string, string>, overall: Number(row.overall) }));
+      let cloudDraft: ReviewDraft | null = draftResult.data ? { weekId: draftResult.data.week_id, index: draftResult.data.current_index, scores: draftResult.data.scores as Record<string, number>, notes: draftResult.data.notes as Record<string, string> } : null;
 
-  useEffect(() => { if (hydrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(reviews)); }, [reviews, hydrated]);
+      // One-time migration from the old browser-only version.
+      try {
+        let migrationSucceeded = true;
+        const localReviews = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]") as Review[];
+        const cloudByWeek = new Map(cloudReviews.map((review) => [review.id, review]));
+        const newerLocal = localReviews.filter((review) => !cloudByWeek.has(review.id) || review.date > cloudByWeek.get(review.id)!.date);
+        if (newerLocal.length) {
+          const { error } = await supabase!.from("reviews").upsert(newerLocal.map((review) => ({ user_id: user.id, week_id: review.id, reviewed_at: review.date, week_label: review.week, scores: review.scores, notes: review.notes, overall: review.overall })));
+          newerLocal.forEach((review) => cloudByWeek.set(review.id, review)); cloudReviews = [...cloudByWeek.values()];
+          if (error) { migrationSucceeded = false; setSyncError("Your earlier browser data is safe, but has not synced yet."); }
+        }
+        const localDraft = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "null") as ReviewDraft | null;
+        if (!cloudDraft && localDraft?.weekId === week.id) {
+          const { error } = await supabase!.from("review_drafts").upsert({ user_id: user.id, week_id: localDraft.weekId, current_index: localDraft.index, scores: localDraft.scores, notes: localDraft.notes, updated_at: new Date().toISOString() });
+          cloudDraft = localDraft;
+          if (error) { migrationSucceeded = false; setSyncError("Your earlier in-progress review is safe, but has not synced yet."); }
+        }
+        if (migrationSucceeded) { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(DRAFT_KEY); }
+      } catch { /* Invalid old browser data is ignored. */ }
+
+      if (!active) return;
+      setReviews(cloudReviews); setSavedDraft(cloudDraft); setHydrated(true);
+    };
+    void loadCloudData();
+    return () => { active = false; };
+  }, [user.id, week.id]);
+
+  const persistDraft = useCallback(async (draft: ReviewDraft) => {
+    setSavedDraft(draft);
+    const { error } = await supabase!.from("review_drafts").upsert({ user_id: user.id, week_id: draft.weekId, current_index: draft.index, scores: draft.scores, notes: draft.notes, updated_at: new Date().toISOString() });
+    if (error) setSyncError("Your latest progress has not synced yet."); else setSyncError("");
+  }, [user.id]);
 
   useEffect(() => {
     if (!hydrated || reviewIndex === null) return;
-    localStorage.setItem(DRAFT_KEY, JSON.stringify({ weekId: week.id, index: reviewIndex, scores: draftScores, notes: draftNotes }));
-  }, [draftNotes, draftScores, hydrated, reviewIndex, week.id]);
+    const draft = { weekId: week.id, index: reviewIndex, scores: draftScores, notes: draftNotes };
+    const timer = window.setTimeout(() => { void persistDraft(draft); }, 500);
+    return () => window.clearTimeout(timer);
+  }, [draftNotes, draftScores, hydrated, persistDraft, reviewIndex, week.id]);
 
   const ordered = useMemo(() => [...reviews].sort((a, b) => a.date.localeCompare(b.date)), [reviews]);
   const latest = ordered.at(-1);
@@ -78,27 +140,27 @@ export default function Home() {
   const latestDelta = delta(latest?.overall, previous?.overall);
 
   const startReview = () => {
-    try {
-      const savedDraft = localStorage.getItem(DRAFT_KEY);
-      if (savedDraft) {
-        const draft = JSON.parse(savedDraft);
-        if (draft.weekId === week.id && Number.isInteger(draft.index)) {
-          setDraftScores(draft.scores ?? {}); setDraftNotes(draft.notes ?? {}); setReviewIndex(Math.max(0, Math.min(draft.index, skills.length - 1)));
-          return;
-        }
-      }
-    } catch { /* Ignore an invalid draft and start from saved weekly data. */ }
+    if (savedDraft?.weekId === week.id && Number.isInteger(savedDraft.index)) {
+      setDraftScores(savedDraft.scores ?? {}); setDraftNotes(savedDraft.notes ?? {}); setReviewIndex(Math.max(0, Math.min(savedDraft.index, skills.length - 1)));
+      return;
+    }
     const existing = reviews.find((r) => r.id === week.id);
     setDraftScores(existing?.scores ?? {}); setDraftNotes(existing?.notes ?? {}); setReviewIndex(0);
   };
 
-  const closeReview = () => setReviewIndex(null);
-  const finishReview = (completedScores = draftScores) => {
+  const closeReview = () => {
+    if (reviewIndex !== null) void persistDraft({ weekId: week.id, index: reviewIndex, scores: draftScores, notes: draftNotes });
+    setReviewIndex(null);
+  };
+  const finishReview = async (completedScores = draftScores) => {
     if (Object.keys(completedScores).length !== skills.length) return;
     const overall = skills.reduce((sum, skill) => sum + completedScores[skill.id], 0) / skills.length;
     const entry: Review = { id: week.id, date: new Date().toISOString(), week: week.label.split(" · ")[0], scores: completedScores, notes: draftNotes, overall };
+    const { error } = await supabase!.from("reviews").upsert({ user_id: user.id, week_id: entry.id, reviewed_at: entry.date, week_label: entry.week, scores: entry.scores, notes: entry.notes, overall: entry.overall });
+    if (error) { setSyncError("This review could not be saved. Please check your connection and try again."); setReviewIndex(null); window.setTimeout(() => setReviewIndex(skills.length - 1), 0); return; }
     setReviews((current) => [...current.filter((r) => r.id !== entry.id), entry]);
-    localStorage.removeItem(DRAFT_KEY);
+    await supabase!.from("review_drafts").delete().eq("user_id", user.id);
+    setSavedDraft(null); setSyncError("");
     setReviewIndex(null); setView("overview");
   };
 
@@ -109,14 +171,34 @@ export default function Home() {
 
   const importData = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; if (!file) return;
-    try { const parsed = JSON.parse(await file.text()); if (Array.isArray(parsed.reviews)) { setReviews(parsed.reviews); localStorage.removeItem(DRAFT_KEY); setSettingsOpen(false); } } catch { alert("That file could not be imported."); }
+    try {
+      const parsed = JSON.parse(await file.text());
+      if (Array.isArray(parsed.reviews)) {
+        const imported = parsed.reviews as Review[];
+        const { error } = await supabase!.from("reviews").upsert(imported.map((review) => ({ user_id: user.id, week_id: review.id, reviewed_at: review.date, week_label: review.week, scores: review.scores, notes: review.notes, overall: review.overall })));
+        if (error) throw error;
+        const byWeek = new Map([...reviews, ...imported].map((review) => [review.id, review]));
+        setReviews([...byWeek.values()]); setSettingsOpen(false); setSyncError("");
+      }
+    } catch { alert("That file could not be imported."); }
     event.target.value = "";
+  };
+
+  const deleteAllData = async () => {
+    if (!confirm("Delete all Northstar reviews and your in-progress review from your synced account?")) return;
+    const [{ error: reviewError }, { error: draftError }] = await Promise.all([
+      supabase!.from("reviews").delete().eq("user_id", user.id),
+      supabase!.from("review_drafts").delete().eq("user_id", user.id),
+    ]);
+    if (reviewError || draftError) { setSyncError("Your data could not be deleted. Please try again."); return; }
+    setReviews([]); setDraftScores({}); setDraftNotes({}); setSavedDraft(null); setSettingsOpen(false); setSyncError("");
   };
 
   const scoreFor = (skill: Skill) => latest?.scores[skill.id];
 
   return (
     <main className="app-shell">
+      {syncError && <button className="sync-error" onClick={() => window.location.reload()}>{syncError} <span>Retry</span></button>}
       <aside className="sidebar">
         <button className="brand-mark" onClick={() => setView("overview")} aria-label="Northstar home">N</button>
         <nav aria-label="Main navigation">
@@ -171,7 +253,7 @@ export default function Home() {
 
       {reviewIndex !== null && <ReviewFlow key={reviewIndex} index={reviewIndex} notes={draftNotes} onChoose={(id, value) => { const completedScores = { ...draftScores, [id]: value }; setDraftScores(completedScores); if (reviewIndex === skills.length - 1) finishReview(completedScores); else setReviewIndex(reviewIndex + 1); }} onNote={(id, value) => setDraftNotes((x) => ({ ...x, [id]: value }))} onBack={() => reviewIndex === 0 ? closeReview() : setReviewIndex(reviewIndex - 1)} onClose={closeReview} />}
       {selectedSkill && <SkillDetail skill={selectedSkill} reviews={ordered} onClose={() => setSelectedSkill(null)} />}
-      {settingsOpen && <DataSettings count={reviews.length} onClose={() => setSettingsOpen(false)} onExport={exportData} onImport={() => fileInput.current?.click()} onReset={() => { if (confirm("Delete all saved Northstar reviews on this device?")) { setReviews([]); setDraftScores({}); setDraftNotes({}); localStorage.removeItem(DRAFT_KEY); setSettingsOpen(false); } }} />}
+      {settingsOpen && <DataSettings email={user.email ?? "Signed-in account"} count={reviews.length} onClose={() => setSettingsOpen(false)} onExport={exportData} onImport={() => fileInput.current?.click()} onReset={() => void deleteAllData()} onSignOut={() => void supabase!.auth.signOut()} />}
       <input ref={fileInput} className="hidden-input" type="file" accept="application/json" onChange={importData} />
     </main>
   );
@@ -220,8 +302,28 @@ function SkillDetail({ skill, reviews, onClose }: { skill: Skill; reviews: Revie
   return <dialog open className="modal-backdrop"><section className="detail-modal"><button className="close-button" onClick={onClose}>×</button><p className="eyebrow">INDIVIDUAL TREND</p><h2>{skill.title}</h2><p className="detail-description">{skill.description}</p><div className="detail-score"><strong>{formatScore(latest?.scores[skill.id])}</strong>{latest && <span>/10 latest</span>}</div>{reviews.length ? <TrendBars reviews={reviews.slice(-10)} value={(r) => r.scores[skill.id]} /> : <p className="no-data-copy">Complete your first weekly review to begin this trend.</p>}{notes.length > 0 && <div className="past-notes"><p className="eyebrow">REFLECTIONS</p>{notes.map((r) => <article key={r.id}><span>{r.week}</span><p>{r.notes[skill.id]}</p></article>)}</div>}</section></dialog>;
 }
 
-function DataSettings({ count, onClose, onExport, onImport, onReset }: { count: number; onClose: () => void; onExport: () => void; onImport: () => void; onReset: () => void }) {
-  return <dialog open className="modal-backdrop"><section className="settings-modal"><button className="close-button" onClick={onClose}>×</button><p className="eyebrow">YOUR DATA</p><h2>Private by default.</h2><p>Your {count} saved {count === 1 ? "review lives" : "reviews live"} only in this browser. Export a backup before changing devices or clearing browser data.</p><div className="settings-actions"><button onClick={onExport} disabled={!count}>Export backup <span>↓</span></button><button onClick={onImport}>Import backup <span>↑</span></button><button className="danger" onClick={onReset} disabled={!count}>Delete all data</button></div></section></dialog>;
+function DataSettings({ email, count, onClose, onExport, onImport, onReset, onSignOut }: { email: string; count: number; onClose: () => void; onExport: () => void; onImport: () => void; onReset: () => void; onSignOut: () => void }) {
+  return <dialog open className="modal-backdrop"><section className="settings-modal"><button className="close-button" onClick={onClose}>×</button><p className="eyebrow">YOUR DATA</p><h2>Private and synced.</h2><p>Your {count} saved {count === 1 ? "review is" : "reviews are"} encrypted in transit and synced to your signed-in account, ready on your phone and computer.</p><div className="account-row"><Cloud aria-hidden="true" /><span><small>SYNCED AS</small>{email}</span></div><div className="settings-actions"><button onClick={onExport} disabled={!count}>Export backup <span>↓</span></button><button onClick={onImport}>Import backup <span>↑</span></button><button onClick={onSignOut}>Sign out <LogOut aria-hidden="true" /></button><button className="danger" onClick={onReset} disabled={!count}>Delete all data</button></div></section></dialog>;
 }
 
 function EmptyState({ onStart }: { onStart: () => void }) { return <div className="empty-state"><p>No scores yet. Your first honest check-in is all it takes to begin.</p><button className="primary-button" onClick={onStart}><span>Start first review</span><b>→</b></button></div>; }
+
+function LoadingScreen() {
+  return <main className="auth-screen"><div className="auth-card"><div className="auth-brand">N</div><p className="eyebrow">NORTHSTAR</p><h1>Finding your progress…</h1><div className="loading-line"><i /></div></div></main>;
+}
+
+function CloudSetupNeeded() {
+  return <main className="auth-screen"><div className="auth-card"><div className="auth-brand">N</div><p className="eyebrow">ONE-TIME SETUP</p><h1>Cloud connection needed.</h1><p className="auth-copy">Add the Supabase project details to finish enabling private sync.</p></div></main>;
+}
+
+function SignInScreen() {
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const signIn = async (event: FormEvent) => {
+    event.preventDefault(); setStatus("sending");
+    const redirectTo = new URL(import.meta.env.BASE_URL ?? "/", window.location.origin).href;
+    const { error } = await supabase!.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } });
+    setStatus(error ? "error" : "sent");
+  };
+  return <main className="auth-screen"><section className="auth-card"><div className="auth-brand">N</div><p className="eyebrow">NORTHSTAR · PRIVATE SYNC</p><h1>Your growth,<br />wherever you are.</h1><p className="auth-copy">Sign in with your email to keep reviews private and continue seamlessly on phone or computer.</p>{status === "sent" ? <div className="magic-sent"><Mail aria-hidden="true" /><div><strong>Check your inbox</strong><p>Open the secure link we sent to {email}.</p></div></div> : <form className="auth-form" onSubmit={signIn}><label htmlFor="northstar-email">Email address</label><input id="northstar-email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /><button type="submit" disabled={status === "sending"}><span>{status === "sending" ? "Sending secure link…" : "Email me a secure link"}</span><b>→</b></button>{status === "error" && <p className="auth-error">We could not send the link. Please try again.</p>}</form>}<p className="auth-footnote"><Cloud aria-hidden="true" /> No password to remember. Your data is protected per account.</p></section></main>;
+}
