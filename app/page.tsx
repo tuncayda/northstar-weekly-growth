@@ -8,6 +8,7 @@ import { isSupabaseConfigured, supabase } from "../src/lib/supabase";
 type Skill = { id: string; title: string; prompt: string; description: string };
 type Review = { id: string; date: string; week: string; scores: Record<string, number>; notes: Record<string, string>; overall: number };
 type ReviewDraft = { weekId: string; index: number; scores: Record<string, number>; notes: Record<string, string> };
+type WeeklyInsight = { weekId: string; createdAt: string; sourceReviewedAt: string; reviewCount: number; focusSkillId: string; pattern: string; actions: string[]; reflectionQuestion: string; encouragement: string };
 type View = "overview" | "trends" | "practice";
 type Theme = "light" | "dark";
 
@@ -90,6 +91,8 @@ function Tracker({ user, theme, onToggleTheme }: { user: User; theme: Theme; onT
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
   const [draftScores, setDraftScores] = useState<Record<string, number>>({});
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({});
+  const [insight, setInsight] = useState<WeeklyInsight | null>(null);
+  const [insightStatus, setInsightStatus] = useState<"idle" | "loading" | "error">("idle");
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -99,16 +102,18 @@ function Tracker({ user, theme, onToggleTheme }: { user: User; theme: Theme; onT
     let active = true;
     const loadCloudData = async () => {
       setHydrated(false); setSyncError("");
-      const [reviewResult, draftResult] = await Promise.all([
+      const [reviewResult, draftResult, insightResult] = await Promise.all([
         supabase!.from("reviews").select("week_id, reviewed_at, week_label, scores, notes, overall").eq("user_id", user.id).order("reviewed_at"),
         supabase!.from("review_drafts").select("week_id, current_index, scores, notes").eq("user_id", user.id).maybeSingle(),
+        supabase!.from("weekly_insights").select("week_id, created_at, source_reviewed_at, review_count, focus_skill_id, pattern, actions, reflection_question, encouragement").eq("user_id", user.id).eq("week_id", week.id).maybeSingle(),
       ]);
       if (!active) return;
-      if (reviewResult.error || draftResult.error) {
+      if (reviewResult.error || draftResult.error || insightResult.error) {
         setSyncError("Cloud sync could not connect. Please try again shortly."); setHydrated(true); return;
       }
       let cloudReviews: Review[] = (reviewResult.data ?? []).map((row) => ({ id: row.week_id, date: row.reviewed_at, week: row.week_label, scores: row.scores as Record<string, number>, notes: row.notes as Record<string, string>, overall: Number(row.overall) }));
       let cloudDraft: ReviewDraft | null = draftResult.data ? { weekId: draftResult.data.week_id, index: draftResult.data.current_index, scores: draftResult.data.scores as Record<string, number>, notes: draftResult.data.notes as Record<string, string> } : null;
+      const cloudInsight: WeeklyInsight | null = insightResult.data ? { weekId: insightResult.data.week_id, createdAt: insightResult.data.created_at, sourceReviewedAt: insightResult.data.source_reviewed_at, reviewCount: insightResult.data.review_count, focusSkillId: insightResult.data.focus_skill_id, pattern: insightResult.data.pattern, actions: insightResult.data.actions as string[], reflectionQuestion: insightResult.data.reflection_question, encouragement: insightResult.data.encouragement } : null;
 
       // One-time migration from the old browser-only version.
       try {
@@ -131,7 +136,7 @@ function Tracker({ user, theme, onToggleTheme }: { user: User; theme: Theme; onT
       } catch { /* Invalid old browser data is ignored. */ }
 
       if (!active) return;
-      setReviews(cloudReviews); setSavedDraft(cloudDraft); setHydrated(true);
+      setReviews(cloudReviews); setSavedDraft(cloudDraft); setInsight(cloudInsight); setHydrated(true);
     };
     void loadCloudData();
     return () => { active = false; };
@@ -176,7 +181,7 @@ function Tracker({ user, theme, onToggleTheme }: { user: User; theme: Theme; onT
     if (error) { setSyncError("This review could not be saved. Please check your connection and try again."); setReviewIndex(null); window.setTimeout(() => setReviewIndex(skills.length - 1), 0); return; }
     setReviews((current) => [...current.filter((r) => r.id !== entry.id), entry]);
     await supabase!.from("review_drafts").delete().eq("user_id", user.id);
-    setSavedDraft(null); setSyncError("");
+    setSavedDraft(null); setInsight(null); setSyncError("");
     setReviewIndex(null); setView("overview");
   };
 
@@ -191,6 +196,13 @@ function Tracker({ user, theme, onToggleTheme }: { user: User; theme: Theme; onT
     const nextIndex = reviewIndex + 1;
     void persistDraft({ weekId: week.id, index: nextIndex, scores: completedScores, notes: draftNotes });
     setReviewIndex(nextIndex);
+  };
+
+  const generateWeeklyInsight = async () => {
+    setInsightStatus("loading");
+    const { data, error } = await supabase!.functions.invoke<WeeklyInsight>("weekly-coach", { body: { weekId: week.id } });
+    if (error || !data) { setInsightStatus("error"); return; }
+    setInsight(data); setInsightStatus("idle");
   };
 
   const exportData = () => {
@@ -214,13 +226,14 @@ function Tracker({ user, theme, onToggleTheme }: { user: User; theme: Theme; onT
   };
 
   const deleteAllData = async () => {
-    if (!confirm("Delete all Northstar reviews and your in-progress review from your synced account?")) return;
-    const [{ error: reviewError }, { error: draftError }] = await Promise.all([
+    if (!confirm("Delete all Northstar reviews, weekly coaching, and your in-progress review from your synced account?")) return;
+    const [{ error: reviewError }, { error: draftError }, { error: insightError }] = await Promise.all([
       supabase!.from("reviews").delete().eq("user_id", user.id),
       supabase!.from("review_drafts").delete().eq("user_id", user.id),
+      supabase!.from("weekly_insights").delete().eq("user_id", user.id),
     ]);
-    if (reviewError || draftError) { setSyncError("Your data could not be deleted. Please try again."); return; }
-    setReviews([]); setDraftScores({}); setDraftNotes({}); setSavedDraft(null); setSettingsOpen(false); setSyncError("");
+    if (reviewError || draftError || insightError) { setSyncError("Your data could not be deleted. Please try again."); return; }
+    setReviews([]); setDraftScores({}); setDraftNotes({}); setSavedDraft(null); setInsight(null); setSettingsOpen(false); setSyncError("");
   };
 
   const scoreFor = (skill: Skill) => latest?.scores[skill.id];
@@ -266,6 +279,8 @@ function Tracker({ user, theme, onToggleTheme }: { user: User; theme: Theme; onT
             <blockquote>Progress is the quiet result of showing up, reflecting honestly, and choosing again.</blockquote>
           </article>
 
+          <WeeklyCoach insight={insight} status={insightStatus} reviewCount={ordered.length} onGenerate={() => void generateWeeklyInsight()} />
+
           <section className="skills-section">
             <div className="section-heading"><div><p className="eyebrow">YOUR PRACTICE</p><h2>All 13 skills</h2></div></div>
             <div className="skill-table">
@@ -291,6 +306,24 @@ function Tracker({ user, theme, onToggleTheme }: { user: User; theme: Theme; onT
 
 function TrendBars({ reviews, value }: { reviews: Review[]; value: (review: Review) => number | undefined }) {
   return <div className="trend-bars" aria-label="Score trend">{reviews.map((review) => { const score = value(review); return <div className="trend-column" key={review.id} title={`${review.week}: ${score?.toFixed(1) ?? "No score"}`}><span>{score?.toFixed(1)}</span><i style={{ height: `${(score ?? 0) * 10}%` }} /><small>{review.week.replace("WEEK ", "W")}</small></div>; })}</div>;
+}
+
+function WeeklyCoach({ insight, status, reviewCount, onGenerate }: { insight: WeeklyInsight | null; status: "idle" | "loading" | "error"; reviewCount: number; onGenerate: () => void }) {
+  const focusSkill = insight ? skills.find((skill) => skill.id === insight.focusSkillId) : null;
+  return <section className={`coach-card ${insight ? "has-insight" : ""}`}>
+    <header><div><p className="eyebrow">YOUR WEEKLY COACH</p><h2>{insight ? "A focus for the week ahead." : "Turn your patterns into a plan."}</h2></div><span>POWERED BY GEMINI</span></header>
+    {insight ? <>
+      <div className="coach-focus"><small>FOCUS SKILL</small><strong>{focusSkill?.title ?? insight.focusSkillId}</strong><p>{insight.pattern}</p></div>
+      <ol>{insight.actions.map((action, index) => <li key={`${index}-${action}`}><span>0{index + 1}</span><p>{action}</p></li>)}</ol>
+      <blockquote><small>QUESTION FOR NEXT WEEK</small>{insight.reflectionQuestion}</blockquote>
+      <footer><p>{insight.encouragement}</p><span>Based on {insight.reviewCount} reviews</span></footer>
+    </> : <div className="coach-empty">
+      <p>{reviewCount < 2 ? "Complete two weekly reviews and Northstar can begin finding useful patterns." : "Gemini will review up to eight weeks of ratings and reflections, then suggest one priority and two practical actions."}</p>
+      <button className="primary-button" onClick={onGenerate} disabled={reviewCount < 2 || status === "loading"}><span>{status === "loading" ? "Finding your pattern…" : reviewCount < 2 ? "Complete another review" : "Generate my weekly tips"}</span><b>→</b></button>
+      {status === "error" && <p className="coach-error" role="status">Your tips could not be generated right now. Please try again.</p>}
+      <small>When you generate, ratings and written reflections from up to eight reviews are securely sent to Gemini.</small>
+    </div>}
+  </section>;
 }
 
 function TrendsView({ reviews, onStart, onSkill }: { reviews: Review[]; onStart: () => void; onSkill: (skill: Skill) => void }) {
