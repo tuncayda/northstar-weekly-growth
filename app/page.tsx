@@ -1,7 +1,7 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChartNoAxesCombined, Cloud, Database, House, LogOut, Mail, Moon, Sparkles, Sun } from "lucide-react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChartNoAxesCombined, Cloud, Database, House, LogOut, Moon, Sparkles, Sun } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { isSupabaseConfigured, supabase } from "../src/lib/supabase";
 
@@ -339,13 +339,12 @@ function CloudSetupNeeded({ theme, onToggleTheme }: { theme: Theme; onToggleThem
 }
 
 function SignInScreen({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
-  const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
-  const signIn = async (event: FormEvent) => {
-    event.preventDefault(); setStatus("sending");
+  const [status, setStatus] = useState<"idle" | "opening" | "error">("idle");
+  const signInWithGoogle = async () => {
+    setStatus("opening");
     const redirectTo = new URL(import.meta.env.BASE_URL ?? "/", window.location.origin).href;
-    const { error } = await supabase!.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } });
-    setStatus(error ? "error" : "sent");
+    const { error } = await supabase!.auth.signInWithOAuth({ provider: "google", options: { redirectTo } });
+    if (error) setStatus("error");
   };
-  return <main className="auth-screen"><ThemeButton theme={theme} onToggle={onToggleTheme} /><section className="auth-card"><div className="auth-brand">N</div><p className="eyebrow">NORTHSTAR · PRIVATE SYNC</p><h1>Your growth,<br />wherever you are.</h1><p className="auth-copy">Sign in with your email to keep reviews private and continue seamlessly on phone or computer.</p>{status === "sent" ? <div className="magic-sent"><Mail aria-hidden="true" /><div><strong>Check your inbox</strong><p>Open the secure link we sent to {email}.</p></div></div> : <form className="auth-form" onSubmit={signIn}><label htmlFor="northstar-email">Email address</label><input id="northstar-email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /><button type="submit" disabled={status === "sending"}><span>{status === "sending" ? "Sending secure link…" : "Email me a secure link"}</span><b>→</b></button>{status === "error" && <p className="auth-error">We could not send the link. Please try again.</p>}</form>}<p className="auth-footnote"><Cloud aria-hidden="true" /> No password to remember. Your data is protected per account.</p></section></main>;
+  return <main className="auth-screen"><ThemeButton theme={theme} onToggle={onToggleTheme} /><section className="auth-card"><div className="auth-brand">N</div><p className="eyebrow">NORTHSTAR · PRIVATE SYNC</p><h1>Your growth,<br />wherever you are.</h1><p className="auth-copy">Continue with your Google account to keep reviews private and seamlessly synced between phone and computer.</p><button className="google-signin" onClick={signInWithGoogle} disabled={status === "opening"}><span className="google-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="#4285f4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.5h3.3c1.9-1.8 2.9-4.4 2.9-7.4Z"/><path fill="#34a853" d="M12 22c2.7 0 5-.9 6.7-2.4l-3.3-2.5c-.9.6-2.1 1-3.4 1a5.9 5.9 0 0 1-5.5-4.1H3.1v2.6A10 10 0 0 0 12 22Z"/><path fill="#fbbc05" d="M6.5 14a6 6 0 0 1 0-3.9V7.5H3.1a10 10 0 0 0 0 9.1L6.5 14Z"/><path fill="#ea4335" d="M12 6a5.4 5.4 0 0 1 3.8 1.5l2.9-2.9A9.8 9.8 0 0 0 3.1 7.5l3.4 2.6A5.9 5.9 0 0 1 12 6Z"/></svg></span><strong>{status === "opening" ? "Opening Google…" : "Continue with Google"}</strong><b>→</b></button>{status === "error" && <p className="auth-error">Google sign-in could not start. Please try again.</p>}<p className="auth-footnote"><Cloud aria-hidden="true" /> Northstar only uses your Google identity to protect your private data.</p></section></main>;
 }
