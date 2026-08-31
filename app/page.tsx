@@ -180,6 +180,19 @@ function Tracker({ user, theme, onToggleTheme }: { user: User; theme: Theme; onT
     setReviewIndex(null); setView("overview");
   };
 
+  const chooseReviewScore = (id: string, value: number) => {
+    if (reviewIndex === null) return;
+    const completedScores = { ...draftScores, [id]: value };
+    setDraftScores(completedScores);
+    if (reviewIndex === skills.length - 1) {
+      void finishReview(completedScores);
+      return;
+    }
+    const nextIndex = reviewIndex + 1;
+    void persistDraft({ weekId: week.id, index: nextIndex, scores: completedScores, notes: draftNotes });
+    setReviewIndex(nextIndex);
+  };
+
   const exportData = () => {
     const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), reviews }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "northstar-review-backup.json"; a.click(); URL.revokeObjectURL(url);
@@ -268,7 +281,7 @@ function Tracker({ user, theme, onToggleTheme }: { user: User; theme: Theme; onT
         {view === "practice" && <PracticeView latest={latest} previous={previous} onSkill={setSelectedSkill} />}
       </section>
 
-      {reviewIndex !== null && <ReviewFlow key={reviewIndex} index={reviewIndex} notes={draftNotes} onChoose={(id, value) => { const completedScores = { ...draftScores, [id]: value }; setDraftScores(completedScores); if (reviewIndex === skills.length - 1) finishReview(completedScores); else setReviewIndex(reviewIndex + 1); }} onNote={(id, value) => setDraftNotes((x) => ({ ...x, [id]: value }))} onBack={() => reviewIndex === 0 ? closeReview() : setReviewIndex(reviewIndex - 1)} onClose={closeReview} />}
+      {reviewIndex !== null && <ReviewFlow key={reviewIndex} index={reviewIndex} notes={draftNotes} onChoose={chooseReviewScore} onNote={(id, value) => setDraftNotes((x) => ({ ...x, [id]: value }))} onBack={() => reviewIndex === 0 ? closeReview() : setReviewIndex(reviewIndex - 1)} onClose={closeReview} />}
       {selectedSkill && <SkillDetail skill={selectedSkill} reviews={ordered} onClose={() => setSelectedSkill(null)} />}
       {settingsOpen && <DataSettings email={user.email ?? "Signed-in account"} count={reviews.length} onClose={() => setSettingsOpen(false)} onExport={exportData} onImport={() => fileInput.current?.click()} onReset={() => void deleteAllData()} onSignOut={() => void supabase!.auth.signOut()} />}
       <input ref={fileInput} className="hidden-input" type="file" accept="application/json" onChange={importData} />
